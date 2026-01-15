@@ -1,0 +1,47 @@
+name: Ubuntu-CLI
+on:
+  workflow_dispatch:
+
+jobs:
+  ubuntu-cli:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Install Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+
+      - name: Connect to Tailscale
+        run: |
+          sudo tailscale up \
+            --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} \
+            --hostname=gh-ubuntu-${{ github.run_id }}
+
+      - name: Enable SSH
+        run: |
+          sudo apt update
+          sudo apt install -y openssh-server
+
+      - name: Create user + SSH key
+        run: |
+          sudo useradd -m toolbox
+          sudo mkdir -p /home/toolbox/.ssh
+          sudo chmod 700 /home/toolbox/.ssh
+          echo "${{ secrets.SSH_PUBLIC_KEY }}" | sudo tee /home/toolbox/.ssh/authorized_keys
+          sudo chmod 600 /home/toolbox/.ssh/authorized_keys
+          sudo chown -R toolbox:toolbox /home/toolbox/.ssh
+          sudo usermod -aG sudo toolbox
+
+      - name: Show access info
+        run: |
+          echo "==== SSH ACCESS ===="
+          tailscale ip -4
+          echo "User: toolbox"
+          echo "Auth: SSH Key"
+
+      - name: Keep alive
+        run: |
+          while true; do
+            sleep 300
+          done
