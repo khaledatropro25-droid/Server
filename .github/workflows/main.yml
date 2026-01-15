@@ -1,4 +1,4 @@
-name: Ubuntu-CLI
+name: Ubuntu-CLI-Password
 on:
   workflow_dispatch:
 
@@ -18,30 +18,35 @@ jobs:
             --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} \
             --hostname=gh-ubuntu-${{ github.run_id }}
 
-      - name: Enable SSH
+      - name: Install and enable SSH
         run: |
           sudo apt update
           sudo apt install -y openssh-server
+          sudo systemctl enable ssh
+          sudo systemctl start ssh
 
-      - name: Create user + SSH key
+      - name: Create user with password
         run: |
           sudo useradd -m toolbox
-          sudo mkdir -p /home/toolbox/.ssh
-          sudo chmod 700 /home/toolbox/.ssh
-          echo "${{ secrets.SSH_PUBLIC_KEY }}" | sudo tee /home/toolbox/.ssh/authorized_keys
-          sudo chmod 600 /home/toolbox/.ssh/authorized_keys
-          sudo chown -R toolbox:toolbox /home/toolbox/.ssh
+          echo "toolbox:admin123" | sudo chpasswd
           sudo usermod -aG sudo toolbox
+
+      - name: Enable SSH password login
+        run: |
+          sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+          sudo systemctl restart ssh
 
       - name: Show access info
         run: |
           echo "==== SSH ACCESS ===="
           tailscale ip -4
           echo "User: toolbox"
-          echo "Auth: SSH Key"
+          echo "Password: admin123"
 
       - name: Keep alive
         run: |
           while true; do
+            echo "[$(date)] Ubuntu CLI running"
             sleep 300
           done
