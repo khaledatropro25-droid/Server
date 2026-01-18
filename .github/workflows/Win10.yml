@@ -1,0 +1,72 @@
+name: Ultimate-Stealth-RDP-Enhanced
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2019
+    timeout-minutes: 360
+
+    steps:
+    # 1️⃣ تنظيف ذكي (من غير كسر النظام)
+    - name: Free Up Space (Safe)
+      run: |
+        Write-Host "Cleaning cache only..."
+        Remove-Item "C:\ProgramData\Package Cache" -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item "$env:TEMP\*" -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "Done."
+
+    # 2️⃣ تثبيت Tailscale
+    - name: Install Tailscale
+      run: |
+        Invoke-WebRequest https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe -OutFile tailscale.exe
+        Start-Process tailscale.exe -ArgumentList "/quiet","/norestart" -Wait
+
+    # 3️⃣ الاتصال بالنفق
+    - name: Connect Tailscale
+      run: |
+        & "C:\Program Files\Tailscale\tailscale.exe" up `
+        --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
+        --accept-routes `
+        --hostname=Node-${{ github.run_number }}
+
+    # 4️⃣ تفعيل RDP
+    - name: Enable RDP
+      run: |
+        Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+    # 5️⃣ إنشاء يوزر عشوائي وآمن
+    - name: Create Secure User
+      run: |
+        $user = "u" + (Get-Random -Minimum 1000 -Maximum 9999)
+        $pass = ConvertTo-SecureString "${{ secrets.RDP_PASSWORD }}" -AsPlainText -Force
+        New-LocalUser $user -Password $pass
+        Add-LocalGroupMember Administrators $user
+        Add-LocalGroupMember "Remote Desktop Users" $user
+        Write-Host "USERNAME=$user" >> $env:GITHUB_ENV
+
+    # 6️⃣ عرض IP
+    - name: Show IP
+      run: |
+        & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+
+    # 7️⃣ Stealth Keep Alive (ذكي ومحدود)
+    - name: Smart Anti-Idle
+      run: |
+        $targets = @("1.1.1.1","8.8.8.8","github.com","microsoft.com")
+        $wsh = New-Object -ComObject WScript.Shell
+
+        for ($i=0; $i -lt 180; $i++) {
+          $target = Get-Random $targets
+          Test-NetConnection $target -Port 80 | Out-Null
+          $wsh.SendKeys("{NUMLOCK}")
+          Start-Sleep -Seconds (Get-Random -Minimum 60 -Maximum 120)
+        }
+
+    # 8️⃣ Cleanup وخروج نظيف
+    - name: Graceful Exit
+      run: |
+        & "C:\Program Files\Tailscale\tailscale.exe" logout
+        Write-Host "Session ended cleanly."
