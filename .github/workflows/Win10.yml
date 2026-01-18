@@ -1,89 +1,82 @@
-name: Ultimate-Stealth-RDP-Final
-
+name: RDP
 on:
   workflow_dispatch:
-
 jobs:
-  build:
-    runs-on: windows-2019
-    timeout-minutes: 360
-
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
     steps:
-    # 1️⃣ تنظيف خفيف وآمن
-    - name: Free Up Space (Safe)
-      shell: powershell
-      run: |
-        Remove-Item "C:\ProgramData\Package Cache" -Recurse -Force -ErrorAction SilentlyContinue
-        Remove-Item "$env:TEMP\*" -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host "Disk cleaned safely."
+      - name: Configure Core RDP Settings
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name TermService -Force
 
-    # 2️⃣ تثبيت Tailscale
-    - name: Install Tailscale
-      shell: powershell
-      run: |
-        Invoke-WebRequest https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe -OutFile tailscale.exe
-        Start-Process tailscale.exe -ArgumentList "/quiet","/norestart" -Wait
+      - name: Create RDP User with Static Password
+        run: |
+          $password = "admin@123"
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
 
-    # 3️⃣ الاتصال بـ Tailscale
-    - name: Connect Tailscale
-      shell: powershell
-      run: |
-        & "C:\Program Files\Tailscale\tailscale.exe" up `
-        --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
-        --accept-routes `
-        --hostname=Ghost-${{ github.run_number }}
+          if (-not (Get-LocalUser -Name "TOOLBOXLAP" -ErrorAction SilentlyContinue)) {
+              New-LocalUser -Name "TOOLBOXLAP" -Password $securePass -AccountNeverExpires
+          }
 
-    # 4️⃣ تفعيل RDP
-    - name: Enable RDP
-      shell: powershell
-      run: |
-        Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-        -Name fDenyTSConnections -Value 0
-        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Add-LocalGroupMember -Group "Administrators" -Member "TOOLBOXLAP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "TOOLBOXLAP"
 
-    # 5️⃣ إنشاء يوزر ثابت وآمن (إنت بس اللي عارفه)
-    - name: Create Secure Fixed User
-      shell: powershell
-      run: |
-        $user = "${{ secrets.RDP_USERNAME }}"
-        $plainPass = "${{ secrets.RDP_PASSWORD }}"
+          echo "RDP_CREDS=User: TOOLBOXLAP | Password: $password" >> $env:GITHUB_ENV
 
-        if ([string]::IsNullOrWhiteSpace($user) -or [string]::IsNullOrWhiteSpace($plainPass)) {
-          Write-Error "RDP credentials are missing!"
-          exit 1
-        }
+          if (-not (Get-LocalUser -Name "TOOLBOXLAP")) {
+              Write-Error "User creation failed"
+              exit 1
+          }
 
-        $pass = ConvertTo-SecureString $plainPass -AsPlainText -Force
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
 
-        New-LocalUser $user -Password $pass -FullName "Authorized Admin" -Description "Secure RDP User"
-        Add-LocalGroupMember -Group "Administrators" -Member $user
-        Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
 
-        Write-Host "Secure RDP user created."
+      - name: Establish Tailscale Connection
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
+              exit 1
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-    # 6️⃣ عرض IP بتاع Tailscale
-    - name: Show Tailscale IP
-      shell: powershell
-      run: |
-        & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+      - name: Verify RDP Accessibility
+        run: |
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
+          if (-not $testResult.TcpTestSucceeded) {
+              Write-Error "TCP connection to RDP port 3389 failed"
+              exit 1
+          }
+          Write-Host "TCP connectivity successful!"
 
-    # 7️⃣ Anti-Idle ذكي وهادي
-    - name: Smart Anti-Idle
-      shell: powershell
-      run: |
-        $targets = @("1.1.1.1","8.8.8.8","github.com","microsoft.com")
-        $wsh = New-Object -ComObject WScript.Shell
-
-        for ($i = 0; $i -lt 180; $i++) {
-          $t = Get-Random $targets
-          Test-NetConnection $t -Port 80 | Out-Null
-          $wsh.SendKeys("{NUMLOCK}")
-          Start-Sleep -Seconds (Get-Random -Minimum 60 -Maximum 120)
-        }
-
-    # 8️⃣ خروج نظيف
-    - name: Graceful Exit
-      shell: powershell
-      run: |
-        & "C:\Program Files\Tailscale\tailscale.exe" logout
-        Write-Host "Session closed cleanly."
+      - name: Maintain Connection
+        run: |
+          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Username: TOOLBOXLAP"
+          Write-Host "Password: admin@123"
+          Write-Host "==================`n"
+          while ($true) {
+              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
+              Start-Sleep -Seconds 300
+          }
