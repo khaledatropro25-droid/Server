@@ -1,4 +1,4 @@
-name: Ultimate-Stealth-RDP-Enhanced
+name: Ultimate-Stealth-RDP-Final
 
 on:
   workflow_dispatch:
@@ -9,64 +9,81 @@ jobs:
     timeout-minutes: 360
 
     steps:
-    # 1️⃣ تنظيف ذكي (من غير كسر النظام)
+    # 1️⃣ تنظيف خفيف وآمن
     - name: Free Up Space (Safe)
+      shell: powershell
       run: |
-        Write-Host "Cleaning cache only..."
         Remove-Item "C:\ProgramData\Package Cache" -Recurse -Force -ErrorAction SilentlyContinue
         Remove-Item "$env:TEMP\*" -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host "Done."
+        Write-Host "Disk cleaned safely."
 
     # 2️⃣ تثبيت Tailscale
     - name: Install Tailscale
+      shell: powershell
       run: |
         Invoke-WebRequest https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe -OutFile tailscale.exe
         Start-Process tailscale.exe -ArgumentList "/quiet","/norestart" -Wait
 
-    # 3️⃣ الاتصال بالنفق
+    # 3️⃣ الاتصال بـ Tailscale
     - name: Connect Tailscale
+      shell: powershell
       run: |
         & "C:\Program Files\Tailscale\tailscale.exe" up `
         --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
         --accept-routes `
-        --hostname=Node-${{ github.run_number }}
+        --hostname=Ghost-${{ github.run_number }}
 
     # 4️⃣ تفعيل RDP
     - name: Enable RDP
+      shell: powershell
       run: |
-        Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
+        Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+        -Name fDenyTSConnections -Value 0
         Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-    # 5️⃣ إنشاء يوزر عشوائي وآمن
-    - name: Create Secure User
+    # 5️⃣ إنشاء يوزر ثابت وآمن (إنت بس اللي عارفه)
+    - name: Create Secure Fixed User
+      shell: powershell
       run: |
-        $user = "u" + (Get-Random -Minimum 1000 -Maximum 9999)
-        $pass = ConvertTo-SecureString "${{ secrets.RDP_PASSWORD }}" -AsPlainText -Force
-        New-LocalUser $user -Password $pass
-        Add-LocalGroupMember Administrators $user
-        Add-LocalGroupMember "Remote Desktop Users" $user
-        Write-Host "USERNAME=$user" >> $env:GITHUB_ENV
+        $user = "${{ secrets.RDP_USERNAME }}"
+        $plainPass = "${{ secrets.RDP_PASSWORD }}"
 
-    # 6️⃣ عرض IP
-    - name: Show IP
+        if ([string]::IsNullOrWhiteSpace($user) -or [string]::IsNullOrWhiteSpace($plainPass)) {
+          Write-Error "RDP credentials are missing!"
+          exit 1
+        }
+
+        $pass = ConvertTo-SecureString $plainPass -AsPlainText -Force
+
+        New-LocalUser $user -Password $pass -FullName "Authorized Admin" -Description "Secure RDP User"
+        Add-LocalGroupMember -Group "Administrators" -Member $user
+        Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user
+
+        Write-Host "Secure RDP user created."
+
+    # 6️⃣ عرض IP بتاع Tailscale
+    - name: Show Tailscale IP
+      shell: powershell
       run: |
         & "C:\Program Files\Tailscale\tailscale.exe" ip -4
 
-    # 7️⃣ Stealth Keep Alive (ذكي ومحدود)
+    # 7️⃣ Anti-Idle ذكي وهادي
     - name: Smart Anti-Idle
+      shell: powershell
       run: |
         $targets = @("1.1.1.1","8.8.8.8","github.com","microsoft.com")
         $wsh = New-Object -ComObject WScript.Shell
 
-        for ($i=0; $i -lt 180; $i++) {
-          $target = Get-Random $targets
-          Test-NetConnection $target -Port 80 | Out-Null
+        for ($i = 0; $i -lt 180; $i++) {
+          $t = Get-Random $targets
+          Test-NetConnection $t -Port 80 | Out-Null
           $wsh.SendKeys("{NUMLOCK}")
           Start-Sleep -Seconds (Get-Random -Minimum 60 -Maximum 120)
         }
 
-    # 8️⃣ Cleanup وخروج نظيف
+    # 8️⃣ خروج نظيف
     - name: Graceful Exit
+      shell: powershell
       run: |
         & "C:\Program Files\Tailscale\tailscale.exe" logout
-        Write-Host "Session ended cleanly."
+        Write-Host "Session closed cleanly."
